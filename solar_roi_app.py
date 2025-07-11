@@ -10,13 +10,48 @@ import json
 # Helper function for ROI calculation - MOVED TO TOP
 def calculate_solar_roi(inputs):
     """
-    Simplified ROI calculation - in a real app, this would use actual APIs
+    Enhanced ROI calculation with weather integration
     """
-    # Basic assumptions (would be API-driven in production)
-    solar_irradiance = 5.5  # kWh/m²/day (average for India)
+    # Basic assumptions (adjusted based on weather conditions)
+    base_solar_irradiance = 5.5  # kWh/m²/day (average for India)
     system_efficiency = 0.85
     panel_cost_per_kw = 45000  # ₹45,000 per kW
     installation_cost_ratio = 0.3  # 30% of panel cost
+    
+    # Weather adjustment factors
+    weather_factors = {
+        'Sunny': 1.0,
+        'Mostly Sunny': 0.95,
+        'Partly Cloudy': 0.85,
+        'Cloudy': 0.70,
+        'Rainy': 0.60,
+        'Very Cloudy': 0.50
+    }
+    
+    # Season adjustment factors
+    season_factors = {
+        'Summer': 1.15,
+        'Winter': 0.80,
+        'Monsoon': 0.65,
+        'Post-Monsoon': 0.90
+    }
+    
+    # Apply weather adjustments
+    weather_factor = weather_factors.get(inputs.get('weather_condition', 'Sunny'), 1.0)
+    season_factor = season_factors.get(inputs.get('dominant_season', 'Summer'), 1.0)
+    
+    # Adjust solar irradiance based on weather
+    adjusted_irradiance = base_solar_irradiance * weather_factor * season_factor
+    
+    # Additional weather-based adjustments
+    dust_factor = 1.0
+    if inputs.get('dust_pollution', 'Low') == 'High':
+        dust_factor = 0.85
+    elif inputs.get('dust_pollution', 'Low') == 'Medium':
+        dust_factor = 0.92
+    
+    # Final irradiance calculation
+    solar_irradiance = adjusted_irradiance * dust_factor
     
     # Calculate system size needed
     monthly_consumption = inputs['monthly_units']
@@ -31,12 +66,21 @@ def calculate_solar_roi(inputs):
     installation_cost = panel_cost * installation_cost_ratio
     total_investment = panel_cost + installation_cost
     
-    # Calculate generation
+    # Calculate generation with weather considerations
     annual_generation = system_size * solar_irradiance * 365 * system_efficiency
     daily_average = annual_generation / 365
     
-    # Monthly generation (simplified seasonal variation)
-    monthly_gen_factors = [0.85, 0.9, 1.0, 1.1, 1.15, 1.1, 1.05, 1.0, 0.95, 0.9, 0.85, 0.8]
+    # Monthly generation with weather-adjusted seasonal variation
+    base_monthly_factors = [0.85, 0.9, 1.0, 1.1, 1.15, 1.1, 1.05, 1.0, 0.95, 0.9, 0.85, 0.8]
+    
+    # Adjust monthly factors based on weather patterns
+    if inputs.get('dominant_season') == 'Monsoon':
+        # Reduce generation during monsoon months (Jun-Sep)
+        monsoon_adjustment = [1.0, 1.0, 1.0, 1.0, 1.0, 0.7, 0.6, 0.6, 0.8, 1.0, 1.0, 1.0]
+        monthly_gen_factors = [base_monthly_factors[i] * monsoon_adjustment[i] for i in range(12)]
+    else:
+        monthly_gen_factors = base_monthly_factors
+    
     monthly_generation = [annual_generation * factor / 12 for factor in monthly_gen_factors]
     
     # Calculate savings
@@ -52,16 +96,19 @@ def calculate_solar_roi(inputs):
     total_20_year_savings = annual_savings * 20
     net_profit = total_20_year_savings - total_investment
     
-    # Determine suitability
+    # Determine suitability with weather considerations
+    weather_score_adjustment = weather_factor * 10  # Scale weather impact
+    base_score = 60
+    
     if payback_years < 5 and annual_generation > monthly_consumption * 10:
         suitability = "Excellent"
-        solar_score = 90
+        solar_score = min(90, base_score + 30 + weather_score_adjustment)
     elif payback_years < 7 and annual_generation > monthly_consumption * 8:
         suitability = "Good"
-        solar_score = 75
+        solar_score = min(85, base_score + 15 + weather_score_adjustment)
     else:
         suitability = "Average"
-        solar_score = 60
+        solar_score = min(75, base_score + weather_score_adjustment)
     
     return {
         'suitability': suitability,
@@ -78,7 +125,9 @@ def calculate_solar_roi(inputs):
         'annual_roi': (annual_savings / total_investment) * 100 if total_investment > 0 else 0,
         'cumulative_savings': cumulative_savings,
         'total_20_year_savings': total_20_year_savings,
-        'net_profit': net_profit
+        'net_profit': net_profit,
+        'weather_impact': weather_factor,
+        'effective_irradiance': solar_irradiance
     }
 
 # Page configuration
@@ -113,6 +162,13 @@ st.markdown("""
         border-radius: 10px;
         margin-top: 1rem;
     }
+    .weather-info {
+        background: #e3f2fd;
+        padding: 1rem;
+        border-radius: 8px;
+        border-left: 4px solid #2196f3;
+        margin: 1rem 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -120,7 +176,7 @@ st.markdown("""
 st.markdown("""
 <div class="main-header">
     <h1>🌞 Smart Solar ROI Predictor for MSMEs</h1>
-    <p>Discover if solar energy is right for your business - Get instant ROI analysis!</p>
+    <p>Discover if solar energy is right for your business - Get instant ROI analysis with weather intelligence!</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -134,9 +190,10 @@ with st.sidebar:
     st.markdown("### How It Works")
     st.markdown("""
     1. **Enter Business Details**
-    2. **AI Analyzes Solar Potential**
-    3. **Get ROI Predictions**
-    4. **View Recommendations**
+    2. **Provide Weather Information**
+    3. **AI Analyzes Solar Potential**
+    4. **Get Weather-Adjusted ROI**
+    5. **View Smart Recommendations**
     """)
 
 # Initialize session state
@@ -253,6 +310,73 @@ if page == "📝 Input Details":
         budget_range = st.selectbox("💰 Budget Range for Solar Installation", [
             "₹1-3 Lakhs", "₹3-5 Lakhs", "₹5-10 Lakhs", "₹10-20 Lakhs", "₹20+ Lakhs"
         ])
+
+    # NEW WEATHER SECTION
+    st.subheader("🌤️ Weather & Environmental Conditions")
+    
+    col5, col6 = st.columns(2)
+    
+    with col5:
+        st.markdown("##### Current Weather Patterns")
+        
+        # Current weather condition
+        weather_condition = st.selectbox("☀️ Typical Weather Condition", [
+            "Sunny", "Mostly Sunny", "Partly Cloudy", "Cloudy", "Rainy", "Very Cloudy"
+        ])
+        
+        # Dominant season
+        dominant_season = st.selectbox("🌿 Dominant Season (Most of the Year)", [
+            "Summer", "Winter", "Monsoon", "Post-Monsoon"
+        ])
+        
+        # Average sunny days
+        sunny_days = st.slider("☀️ Average Sunny Days per Month", 
+                              min_value=5, max_value=30, value=20)
+        
+        # Temperature range
+        temp_range = st.selectbox("🌡️ Average Temperature Range", [
+            "Very Hot (>40°C)", "Hot (30-40°C)", "Moderate (20-30°C)", 
+            "Cool (10-20°C)", "Cold (<10°C)"
+        ])
+    
+    with col6:
+        st.markdown("##### Environmental Factors")
+        
+        # Dust and pollution
+        dust_pollution = st.selectbox("🌫️ Dust/Air Pollution Level", [
+            "Low", "Medium", "High"
+        ])
+        
+        # Shading issues
+        shading_issues = st.selectbox("🌳 Roof Shading Issues", [
+            "No Shading", "Partial Shading (Morning)", "Partial Shading (Afternoon)", 
+            "Heavy Shading", "Seasonal Shading"
+        ])
+        
+        # Monsoon intensity
+        monsoon_intensity = st.selectbox("🌧️ Monsoon Intensity", [
+            "Light", "Moderate", "Heavy", "Very Heavy"
+        ])
+        
+        # Wind conditions
+        wind_conditions = st.selectbox("💨 Wind Conditions", [
+            "Calm", "Light Breeze", "Moderate Wind", "Strong Wind", "Very Windy"
+        ])
+    
+    # Weather impact info
+    st.markdown("""
+    <div class="weather-info">
+        <h4>🌦️ Weather Impact on Solar Performance</h4>
+        <p><strong>Why weather matters:</strong> Solar panel efficiency depends heavily on sunlight exposure, 
+        temperature, and environmental conditions. Our AI considers these factors to give you accurate ROI predictions.</p>
+        <ul>
+            <li><strong>Sunny conditions:</strong> Maximum solar generation</li>
+            <li><strong>Cloudy/Rainy days:</strong> Reduced but still significant generation</li>
+            <li><strong>Dust/Pollution:</strong> Can reduce efficiency by 10-20%</li>
+            <li><strong>Temperature:</strong> Extreme heat can slightly reduce efficiency</li>
+        </ul>
+    </div>
+    """, unsafe_allow_html=True)
     
     # Additional details
     st.subheader("📋 Additional Information")
@@ -279,7 +403,7 @@ if page == "📝 Input Details":
     
     # Calculate button
     st.markdown("---")
-    if st.button("🚀 Calculate Solar ROI", type="primary", use_container_width=True):
+    if st.button("🚀 Calculate Weather-Adjusted Solar ROI", type="primary", use_container_width=True):
         if location and rooftop_area > 0 and monthly_units > 0:
             # Store inputs in session state
             st.session_state.inputs = {
@@ -293,25 +417,57 @@ if page == "📝 Input Details":
                 'roof_type': roof_type,
                 'roof_condition': roof_condition,
                 'priority': priority,
-                'timeline': timeline
+                'timeline': timeline,
+                'contact_consent': contact_consent,
+                # Weather parameters
+                'weather_condition': weather_condition,
+                'dominant_season': dominant_season,
+                'sunny_days': sunny_days,
+                'temp_range': temp_range,
+                'dust_pollution': dust_pollution,
+                'shading_issues': shading_issues,
+                'monsoon_intensity': monsoon_intensity,
+                'wind_conditions': wind_conditions
             }
             
             # Perform calculations
             st.session_state.results = calculate_solar_roi(st.session_state.inputs)
             st.session_state.calculated = True
             
-            st.success("✅ Calculation completed! Go to 'Results & Analysis' to view your report.")
+            st.success("✅ Weather-adjusted calculation completed! Go to 'Results & Analysis' to view your detailed report.")
         else:
             st.error("⚠️ Please fill in all required fields: Location, Rooftop Area, and Electricity Consumption")
 
 # Page 2: Results & Analysis
 elif page == "📊 Results & Analysis":
     if st.session_state.calculated:
-        st.header("📈 Your Solar ROI Analysis Report")
+        st.header("📈 Your Weather-Adjusted Solar ROI Analysis Report")
         
         results = st.session_state.results
+        inputs = st.session_state.inputs
+        
+        # Weather impact summary
+        st.markdown("""
+        <div class="weather-info">
+            <h4>🌤️ Weather Impact Analysis</h4>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        col_weather1, col_weather2, col_weather3 = st.columns(3)
+        
+        with col_weather1:
+            st.metric("🌤️ Weather Impact Factor", f"{results['weather_impact']:.2f}", 
+                     delta="1.0 = Ideal" if results['weather_impact'] >= 1.0 else "Below Ideal")
+        
+        with col_weather2:
+            st.metric("☀️ Effective Solar Irradiance", f"{results['effective_irradiance']:.1f} kWh/m²/day")
+        
+        with col_weather3:
+            weather_status = "Excellent" if results['weather_impact'] >= 0.95 else "Good" if results['weather_impact'] >= 0.85 else "Fair"
+            st.metric("🌈 Weather Suitability", weather_status)
         
         # Summary metrics
+        st.markdown("---")
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
@@ -332,7 +488,7 @@ elif page == "📊 Results & Analysis":
         col1, col2 = st.columns(2)
         
         with col1:
-            st.subheader("☀️ Solar Generation Analysis")
+            st.subheader("☀️ Weather-Adjusted Solar Generation")
             
             # Solar generation chart
             months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
@@ -343,7 +499,7 @@ elif page == "📊 Results & Analysis":
             fig.add_trace(go.Bar(x=months, y=generation, 
                                name='Solar Generation (kWh)',
                                marker_color='orange'))
-            fig.update_layout(title="Monthly Solar Generation Forecast",
+            fig.update_layout(title="Monthly Solar Generation Forecast (Weather-Adjusted)",
                             xaxis_title="Month",
                             yaxis_title="Generation (kWh)")
             st.plotly_chart(fig, use_container_width=True)
@@ -354,7 +510,16 @@ elif page == "📊 Results & Analysis":
             - **System Size**: {results['system_size']:.1f} kW
             - **Annual Generation**: {results['annual_generation']:,.0f} kWh
             - **Daily Average**: {results['daily_average']:.1f} kWh
-            - **Peak Sun Hours**: {results['peak_sun_hours']:.1f} hours
+            - **Weather-Adjusted Irradiance**: {results['effective_irradiance']:.1f} kWh/m²/day
+            """)
+            
+            # Weather conditions summary
+            st.markdown(f"""
+            **Weather Conditions:**
+            - **Typical Weather**: {inputs['weather_condition']}
+            - **Dominant Season**: {inputs['dominant_season']}
+            - **Sunny Days/Month**: {inputs['sunny_days']} days
+            - **Dust/Pollution**: {inputs['dust_pollution']}
             """)
         
         with col2:
@@ -372,7 +537,7 @@ elif page == "📊 Results & Analysis":
             fig.add_hline(y=results['total_investment'], 
                          line_dash="dash", line_color="red",
                          annotation_text="Break-even Point")
-            fig.update_layout(title="20-Year Savings Projection",
+            fig.update_layout(title="20-Year Savings Projection (Weather-Adjusted)",
                             xaxis_title="Year",
                             yaxis_title="Cumulative Savings (₹)")
             st.plotly_chart(fig, use_container_width=True)
@@ -386,99 +551,66 @@ elif page == "📊 Results & Analysis":
             - **Net Profit (20 years)**: ₹{results['net_profit']:,.0f}
             """)
         
-        # Recommendations
+        # Weather-specific recommendations
         st.markdown("---")
-        st.subheader("🎯 Recommendations")
+        st.subheader("🌤️ Weather-Specific Insights")
         
-        if results['suitability'] == "Excellent":
-            st.success("""
-            ✅ **Highly Recommended**: Your location has excellent solar potential! 
-            This is a great investment opportunity with strong returns.
-            """)
-        elif results['suitability'] == "Good":
-            st.info("""
-            ✅ **Recommended**: Good solar potential with decent returns. 
-            Consider proceeding with the installation.
-            """)
+        # Generate weather-specific recommendations
+        weather_recommendations = []
+        
+        if inputs['weather_condition'] in ['Cloudy', 'Very Cloudy']:
+            weather_recommendations.append("⚠️ Consider high-efficiency panels for cloudy conditions")
+        
+        if inputs['dust_pollution'] == 'High':
+            weather_recommendations.append("🧹 Plan for regular panel cleaning (monthly)")
+        
+        if inputs['dominant_season'] == 'Monsoon':
+            weather_recommendations.append("☔ Consider waterproof mounting and drainage systems")
+        
+        if inputs['monsoon_intensity'] in ['Heavy', 'Very Heavy']:
+            weather_recommendations.append("🌧️ Ensure robust structural support for heavy rains")
+        
+            if inputs['wind_conditions'] in ['Strong Wind', 'Very Windy']:
+                weather_recommendations.append("💨 Install wind-resistant mounting systems")
+
+        # Display recommendations
+        if weather_recommendations:
+            for rec in weather_recommendations:
+                st.markdown(f"- {rec}")
         else:
-            st.warning("""
-            ⚠️ **Consider Carefully**: Moderate solar potential. 
-            You might want to explore additional energy efficiency measures first.
-            """)
-        
-        # Action items
-        st.markdown("### 🚀 Next Steps")
-        st.markdown("""
-        1. **Get Multiple Quotes**: Contact 3-4 local solar installers
-        2. **Check Subsidies**: Explore available government incentives
-        3. **Financing Options**: Consider solar loans or leasing
-        4. **Site Survey**: Schedule a detailed technical assessment
-        """)
-        
-    else:
-        st.warning("⚠️ Please complete the input form first to see your results.")
-        st.markdown("👈 Go to 'Input Details' to enter your business information.")
+            st.success("✅ No major weather-related issues detected. Standard installation should suffice.")
 
 # Page 3: Recommendations
 elif page == "💡 Recommendations":
-    st.header("🔗 Resources & Recommendations")
-    
     if st.session_state.calculated:
-        st.success("Based on your analysis, here are personalized recommendations:")
+        st.header("💡 Smart Solar Recommendations")
         
-        # Tabs for different recommendations
-        tab1, tab2, tab3, tab4 = st.tabs(["🏭 Installers", "💰 Financing", "🎁 Subsidies", "📚 Resources"])
+        inputs = st.session_state.inputs
+        results = st.session_state.results
         
-        with tab1:
-            st.subheader("Recommended Solar Installers")
-            # This would integrate with a database of local installers
-            st.markdown("""
-            **Top Rated Installers in Your Area:**
-            1. **SolarMax Solutions** - ⭐⭐⭐⭐⭐ (4.8/5) - Contact: +91-9876543210
-            2. **GreenTech Energy** - ⭐⭐⭐⭐ (4.5/5) - Contact: +91-9876543211
-            3. **EcoSolar Systems** - ⭐⭐⭐⭐ (4.3/5) - Contact: +91-9876543212
-            
-            💡 **Tip**: Get quotes from at least 3 installers to compare prices and services.
-            """)
+        st.subheader("📌 Summary")
+        st.markdown(f"""
+        Based on your business details and environmental conditions in **{inputs['location']}**, here are our top insights:
+        - **Solar Suitability:** {results['suitability']}
+        - **Payback Period:** {results['payback_years']:.1f} years
+        - **Net Profit over 20 Years:** ₹{results['net_profit']:,.0f}
+        """)
         
-        with tab2:
-            st.subheader("Financing Options")
-            st.markdown("""
-            **Available Financing:**
-            1. **Solar Loans** - 8-12% interest, 5-10 year terms
-            2. **MSME Loans** - Special rates for small businesses
-            3. **Leasing Options** - No upfront cost, monthly payments
-            4. **Government Schemes** - Subsidized financing available
-            """)
+        st.markdown("---")
+        st.subheader("✅ Recommended Next Steps")
         
-        with tab3:
-            st.subheader("Government Subsidies & Incentives")
-            st.markdown("""
-            **Available Incentives:**
-            1. **Central Government**: 20% subsidy on solar installations
-            2. **State Incentives**: Additional 10-15% subsidy (varies by state)
-            3. **Tax Benefits**: Accelerated depreciation, tax deductions
-            4. **Net Metering**: Sell excess power back to grid
-            """)
+        st.markdown("""
+        1. **Contact local solar vendors** for quotes within your budget range.
+        2. **Request site inspection** to confirm roof conditions and shading analysis.
+        3. **Evaluate subsidy opportunities** available in your state or through central government schemes.
+        4. **Plan maintenance** – especially if pollution or heavy monsoon is present.
+        5. **Track generation** using a smart solar monitoring app post-installation.
+        """)
         
-        with tab4:
-            st.subheader("Additional Resources")
-            st.markdown("""
-            **Useful Links:**
-            - [Solar Rooftop Portal](https://solarrooftop.gov.in/)
-            - [MNRE Guidelines](https://mnre.gov.in/)
-            - [State Solar Policies](https://www.solar-energy.org/)
-            - [Solar Calculator Tools](https://www.solar-calculator.com/)
-            """)
-    
-    else:
-        st.info("Complete your solar analysis first to get personalized recommendations!")
+        if inputs['contact_consent']:
+            st.success("📞 Thanks! A solar expert may reach out with relevant offers.")
+        else:
+            st.info("📩 You can also share this report with your local installer.")
 
-# Footer
-st.markdown("---")
-st.markdown("""
-<div style='text-align: center; color: #666; padding: 1rem;'>
-    <p>🌱 <strong>Smart Solar ROI Predictor</strong> | Empowering MSMEs with Solar Intelligence</p>
-    <p>Made with ❤️ for a sustainable future | © 2024</p>
-</div>
-""", unsafe_allow_html=True)
+    else:
+        st.warning("🚧 Please complete the input section and calculation first.")

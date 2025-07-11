@@ -1,4 +1,7 @@
 streamlit
-plotly
-pandas
 numpy
+pandas
+plotly
+scikit-learn
+geopy
+requests
